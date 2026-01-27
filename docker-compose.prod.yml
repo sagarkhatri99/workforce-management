@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: workforce-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-workforce}
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-workforce}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./packages/backend
+    container_name: workforce-backend
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-workforce}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-production-secret-key-change-this}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1d}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      RATE_LIMIT_WINDOW_MS: 60000
+      RATE_LIMIT_MAX_REQUESTS: 300
+    command: sh -c "npx prisma migrate deploy && npm start"
+    ports:
+      - "3001:3000"
+
+  web:
+    build: ./packages/web
+    container_name: workforce-web
+    restart: always
+    ports:
+      - "80:80"
+      - "3000:80"
+    depends_on:
+      - backend
