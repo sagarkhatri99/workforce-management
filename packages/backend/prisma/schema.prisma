@@ -1,0 +1,99 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String       @id @default(cuid())
+  email     String       @unique
+  password  String
+  name      String?
+  role      Role         @default(WORKER)
+  shifts    Shift[]      // Relation to shifts assigned to this worker
+  clocks    ClockEvent[] // Relation to clock events
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  WORKER
+}
+
+model Shift {
+  id          String      @id @default(cuid())
+  title       String
+  description String?
+  startTime   DateTime
+  endTime     DateTime
+  location    String?
+  skills      String      // Stored as JSON string
+  status      ShiftStatus @default(OPEN)
+
+  workerId    String?     @map("worker_id")
+  worker      User?       @relation(fields: [workerId], references: [id])
+
+  createdBy   String      // ID of manager who created it
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@map("shifts")
+}
+
+enum ShiftStatus {
+  OPEN
+  CLAIMED
+  COMPLETED
+}
+
+model ClockEvent {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  user      User      @relation(fields: [userId], references: [id])
+
+  type      ClockType
+  timestamp DateTime  @default(now())
+
+  // Optional geolocation
+  lat       Float?
+  lng       Float?
+
+  createdAt DateTime  @default(now())
+
+  @@map("clock_events")
+}
+
+enum ClockType {
+  IN
+  OUT
+}
+
+// GDPR Models
+model DSRRequest {
+  id          String      @id @default(cuid())
+  userId      String
+  type        String      // ACCESS, ERASURE
+  status      String      // PENDING, COMPLETED
+  createdAt   DateTime    @default(now())
+  fulfilledAt DateTime?
+}
+
+model AuditLog {
+  id        String    @id @default(cuid())
+  userId    String?
+  action    String
+  resource  String
+  details   String?
+  ip        String?
+  timestamp DateTime  @default(now())
+}
