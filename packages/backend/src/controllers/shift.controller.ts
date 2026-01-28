@@ -1,393 +1,193 @@
 import { Request, Response } from 'express';
-import { Shift } from '../models/Shift';
-import { User } from '../models/User';
-import { Location } from '../models/Location';
+import prisma from '../utils/prisma';
+import { createShiftSchema } from '../utils/validation';
+import { sendEmail } from '../utils/email';
+import { logAudit } from '../utils/audit';
 import { z } from 'zod';
 
-// Validation schema
-const createShiftSchema = z.object({
-    locationId: z.string(),
-    title: z.string().min(2).max(255),
-    startTime: z.string().datetime(),
-    endTime: z.string().datetime(),
-    maxWorkers: z.number().min(1).max(100),
-    hourlyRate: z.number().min(11.44).optional(),
-    notes: z.string().max(1000).optional(),
-});
+export const createShift = async (req: Request, res: Response) => {
+  try {
+    const data = createShiftSchema.parse(req.body);
 
-const updateShiftSchema = createShiftSchema.partial();
+    const skillsString = data.skills ? JSON.stringify(data.skills) : '[]';
 
-/**
- * Create new shift
- * POST /api/v1/shifts
- */
-export const createShift = async (req: Request, res: Response): Promise<void> => {
-    try {
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
+    const shift = await prisma.shift.create({
+      data: {
+        title: data.title,
+        description: data.description,
+        startTime: data.startTime,
+        endTime: data.endTime,
+        location: data.location,
+        skills: skillsString,
+        status: 'OPEN',
+        createdBy: req.user!.userId,
+      },
+    });
 
-        const validatedData = createShiftSchema.parse(req.body);
+    await logAudit(req.user!.userId, 'CREATE', 'Shift', `Created shift ${shift.id}`, req.ip);
 
-        // Verify location exists and belongs to organization
-        const location = await Location.findOne({
-            _id: validatedData.locationId,
-            organizationId: req.user.organizationId,
-        });
-
-        if (!location) {
-            res.status(404).json({ error: 'Location not found' });
-            return;
-        }
-
-        // Create shift
-        const shift = await Shift.create({
-            organizationId: req.user.organizationId,
-            locationId: validatedData.locationId,
-            title: validatedData.title,
-            startTime: new Date(validatedData.startTime),
-            endTime: new Date(validatedData.endTime),
-            maxWorkers: validatedData.maxWorkers,
-            hourlyRate: validatedData.hourlyRate,
-            notes: validatedData.notes,
-            status: 'draft',
-            createdBy: req.user.userId,
-            assignedWorkers: [],
-        });
-
-        res.status(201).json({
-            message: 'Shift created successfully',
-            shift: {
-                id: shift._id,
-                title: shift.title,
-                locationId: shift.locationId,
-                startTime: shift.startTime,
-                endTime: shift.endTime,
-                maxWorkers: shift.maxWorkers,
-                assignedWorkers: shift.assignedWorkers,
-                hourlyRate: shift.hourlyRate,
-                status: shift.status,
-            },
-        });
-    } catch (error) {
-        if (error instanceof z.ZodError) {
-            res.status(400).json({ error: 'Validation failed', details: error.errors });
-            return;
-        }
-        console.error('Create shift error:', error);
-        res.status(500).json({ error: 'Failed to create shift' });
+    res.status(201).json({ ...shift, skills: JSON.parse(shift.skills) });
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({ message: 'Validation error', errors: error.errors });
     }
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 };
 
-/**
- * Get shifts
- * GET /api/v1/shifts
- */
-export const getShifts = async (req: Request, res: Response): Promise<void> => {
-    try {
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
+export const getShifts = async (req: Request, res: Response) => {
+  try {
+    const { status, myShifts } = req.query;
+    const userId = req.user!.userId;
+    const role = req.user!.role;
 
-        const { locationId, status, startDate, endDate } = req.query;
-        const query: any = { organizationId: req.user.organizationId };
+    const where: any = {};
 
-        if (locationId) query.locationId = locationId;
-        if (status) query.status = status;
-
-        if (startDate || endDate) {
-            query.startTime = {};
-            if (startDate) query.startTime.$gte = new Date(startDate as string);
-            if (endDate) query.startTime.$lte = new Date(endDate as string);
-        }
-
-        const shifts = await Shift.find(query)
-            .populate('locationId', 'name coordinates')
-            .populate('assignedWorkers', 'name email')
-            .sort({ startTime: 1 });
-
-        res.json({
-            shifts: shifts.map((shift) => ({
-                id: shift._id,
-                title: shift.title,
-                location: shift.locationId,
-                startTime: shift.startTime,
-                endTime: shift.endTime,
-                maxWorkers: shift.maxWorkers,
-                assignedWorkers: shift.assignedWorkers,
-                hourlyRate: shift.hourlyRate,
-                status: shift.status,
-                notes: shift.notes,
-            })),
-            total: shifts.length,
-        });
-    } catch (error) {
-        console.error('Get shifts error:', error);
-        res.status(500).json({ error: 'Failed to get shifts' });
+    if (status) {
+      where.status = status as string;
     }
+
+    if (myShifts === 'true' && role === 'WORKER') {
+      where.workerId = userId;
+    } else if (role === 'WORKER') {
+      if (!status) {
+         where.OR = [
+             { status: 'OPEN' },
+             { workerId: userId }
+         ];
+      }
+    }
+
+    const shifts = await prisma.shift.findMany({
+      where,
+      orderBy: { startTime: 'asc' },
+      include: { worker: { select: { name: true, email: true } } }
+    });
+
+    const formattedShifts = shifts.map(s => ({
+      ...s,
+      skills: JSON.parse(s.skills)
+    }));
+
+    res.json(formattedShifts);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 };
 
-/**
- * Get single shift
- * GET /api/v1/shifts/:id
- */
-export const getShift = async (req: Request, res: Response): Promise<void> => {
-    try {
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
+export const claimShift = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user!.userId;
 
-        const shift = await Shift.findOne({
-            _id: req.params.id,
-            organizationId: req.user.organizationId,
-        })
-            .populate('locationId')
-            .populate('assignedWorkers', 'name email role hourlyRate')
-            .populate('createdBy', 'name email');
+    const shift = await prisma.shift.findUnique({ where: { id } });
 
-        if (!shift) {
-            res.status(404).json({ error: 'Shift not found' });
-            return;
-        }
-
-        res.json({ shift });
-    } catch (error) {
-        console.error('Get shift error:', error);
-        res.status(500).json({ error: 'Failed to get shift' });
+    if (!shift) {
+      return res.status(404).json({ message: 'Shift not found' });
     }
-};
 
-/**
- * Update shift
- * PUT /api/v1/shifts/:id
- */
-export const updateShift = async (req: Request, res: Response): Promise<void> => {
-    try {
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
+    if (shift.status !== 'OPEN') {
+      return res.status(400).json({ message: 'Shift is not available' });
+    }
 
-        const validatedData = updateShiftSchema.parse(req.body);
+    const updatedShift = await prisma.shift.update({
+      where: { id },
+      data: {
+        workerId: userId,
+        status: 'CLAIMED',
+      },
+      include: {
+          worker: { select: { name: true, email: true } }
+      }
+    });
 
-        const updateData: any = {};
-        if (validatedData.title) updateData.title = validatedData.title;
-        if (validatedData.startTime) updateData.startTime = new Date(validatedData.startTime);
-        if (validatedData.endTime) updateData.endTime = new Date(validatedData.endTime);
-        if (validatedData.maxWorkers) updateData.maxWorkers = validatedData.maxWorkers;
-        if (validatedData.hourlyRate !== undefined) updateData.hourlyRate = validatedData.hourlyRate;
-        if (validatedData.notes !== undefined) updateData.notes = validatedData.notes;
-
-        const shift = await Shift.findOneAndUpdate(
-            {
-                _id: req.params.id,
-                organizationId: req.user.organizationId,
-            },
-            updateData,
-            { new: true, runValidators: true }
+    if (updatedShift.worker?.email) {
+        await sendEmail(
+            updatedShift.worker.email,
+            'Shift Claimed',
+            `You have claimed the shift: ${updatedShift.title} at ${updatedShift.location}.`
         );
+    }
 
-        if (!shift) {
-            res.status(404).json({ error: 'Shift not found' });
-            return;
-        }
+    await logAudit(userId, 'CLAIM', 'Shift', `Claimed shift ${id}`, req.ip);
 
-        res.json({
-            message: 'Shift updated successfully',
-            shift,
+    res.json({ ...updatedShift, skills: JSON.parse(updatedShift.skills) });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+const updateSchema = createShiftSchema.partial();
+
+export const updateShift = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const data = updateSchema.parse(req.body);
+
+        const skillsString = data.skills ? JSON.stringify(data.skills) : undefined;
+
+        const shift = await prisma.shift.update({
+            where: { id },
+            data: {
+                ...data,
+                skills: skillsString,
+            }
         });
-    } catch (error) {
-        if (error instanceof z.ZodError) {
-            res.status(400).json({ error: 'Validation failed', details: error.errors });
-            return;
-        }
-        console.error('Update shift error:', error);
-        res.status(500).json({ error: 'Failed to update shift' });
+
+        await logAudit(req.user!.userId, 'UPDATE', 'Shift', `Updated shift ${id}`, req.ip);
+        res.json({ ...shift, skills: JSON.parse(shift.skills) });
+    } catch (error: any) {
+        if (error.code === 'P2025') return res.status(404).json({ message: 'Shift not found' });
+        if (error.name === 'ZodError') return res.status(400).json({ message: 'Validation error', errors: error.errors });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-/**
- * Delete shift (cancel)
- * DELETE /api/v1/shifts/:id
- */
-export const deleteShift = async (req: Request, res: Response): Promise<void> => {
+export const deleteShift = async (req: Request, res: Response) => {
     try {
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
-
-        const shift = await Shift.findOneAndUpdate(
-            {
-                _id: req.params.id,
-                organizationId: req.user.organizationId,
-            },
-            { status: 'cancelled' },
-            { new: true }
-        );
-
-        if (!shift) {
-            res.status(404).json({ error: 'Shift not found' });
-            return;
-        }
-
-        // TODO: Send notifications to assigned workers
-
-        res.json({ message: 'Shift cancelled successfully' });
-    } catch (error) {
-        console.error('Delete shift error:', error);
-        res.status(500).json({ error: 'Failed to delete shift' });
+        const { id } = req.params;
+        await prisma.shift.delete({ where: { id } });
+        await logAudit(req.user!.userId, 'DELETE', 'Shift', `Deleted shift ${id}`, req.ip);
+        res.json({ message: 'Shift deleted' });
+    } catch (error: any) {
+        if (error.code === 'P2025') return res.status(404).json({ message: 'Shift not found' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-/**
- * Publish shift (make visible to workers)
- * POST /api/v1/shifts/:id/publish
- */
-export const publishShift = async (req: Request, res: Response): Promise<void> => {
+export const assignWorker = async (req: Request, res: Response) => {
     try {
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
-
-        const shift = await Shift.findOneAndUpdate(
-            {
-                _id: req.params.id,
-                organizationId: req.user.organizationId,
-                status: 'draft',
-            },
-            {
-                status: 'published',
-                publishedAt: new Date(),
-            },
-            { new: true }
-        );
-
-        if (!shift) {
-            res.status(404).json({ error: 'Shift not found or already published' });
-            return;
-        }
-
-        // TODO: Send push notifications to eligible workers
-
-        res.json({
-            message: 'Shift published successfully',
-            shift,
-        });
-    } catch (error) {
-        console.error('Publish shift error:', error);
-        res.status(500).json({ error: 'Failed to publish shift' });
-    }
-};
-
-/**
- * Manually assign worker to shift
- * POST /api/v1/shifts/:id/assign
- */
-export const assignWorker = async (req: Request, res: Response): Promise<void> => {
-    try {
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
-
+        const { id } = req.params;
         const { workerId } = req.body;
 
-        if (!workerId) {
-            res.status(400).json({ error: 'Worker ID is required' });
-            return;
-        }
+        if (!workerId) return res.status(400).json({ message: 'Worker ID required' });
 
-        // Verify worker exists and belongs to organization
-        const worker = await User.findOne({
-            _id: workerId,
-            organizationId: req.user.organizationId,
-            role: 'worker',
-            status: 'active',
-        });
-
-        if (!worker) {
-            res.status(404).json({ error: 'Worker not found' });
-            return;
-        }
-
-        // Get shift
-        const shift = await Shift.findOne({
-            _id: req.params.id,
-            organizationId: req.user.organizationId,
-        });
-
-        if (!shift) {
-            res.status(404).json({ error: 'Shift not found' });
-            return;
-        }
-
-        // Check if shift is full
-        if (shift.assignedWorkers.length >= shift.maxWorkers) {
-            res.status(400).json({ error: 'Shift is full' });
-            return;
-        }
-
-        // Check if worker already assigned
-        if (shift.assignedWorkers.includes(worker._id)) {
-            res.status(400).json({ error: 'Worker already assigned to this shift' });
-            return;
-        }
-
-        // Assign worker
-        shift.assignedWorkers.push(worker._id);
-        await shift.save();
-
-        // TODO: Send notification to worker
-
-        res.json({
-            message: 'Worker assigned successfully',
-            shift: {
-                id: shift._id,
-                title: shift.title,
-                assignedWorkers: shift.assignedWorkers,
+        const shift = await prisma.shift.update({
+            where: { id },
+            data: {
+                workerId,
+                status: 'CLAIMED'
             },
-        });
-    } catch (error) {
-        console.error('Assign worker error:', error);
-        res.status(500).json({ error: 'Failed to assign worker' });
-    }
-};
-
-/**
- * Unassign worker from shift
- * DELETE /api/v1/shifts/:id/assign/:workerId
- */
-export const unassignWorker = async (req: Request, res: Response): Promise<void> => {
-    try {
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
-
-        const shift = await Shift.findOne({
-            _id: req.params.id,
-            organizationId: req.user.organizationId,
+             include: {
+                worker: { select: { name: true, email: true } }
+            }
         });
 
-        if (!shift) {
-            res.status(404).json({ error: 'Shift not found' });
-            return;
+        if (shift.worker?.email) {
+             await sendEmail(
+                shift.worker.email,
+                'Shift Assigned',
+                `You have been assigned to shift: ${shift.title} at ${shift.location}.`
+            );
         }
 
-        // Remove worker
-        shift.assignedWorkers = shift.assignedWorkers.filter(
-            (id) => id.toString() !== req.params.workerId
-        );
-        await shift.save();
-
-        res.json({ message: 'Worker unassigned successfully' });
-    } catch (error) {
-        console.error('Unassign worker error:', error);
-        res.status(500).json({ error: 'Failed to unassign worker' });
+        await logAudit(req.user!.userId, 'ASSIGN', 'Shift', `Assigned worker ${workerId} to shift ${id}`, req.ip);
+        res.json({ ...shift, skills: JSON.parse(shift.skills) });
+    } catch (error: any) {
+        if (error.code === 'P2025') return res.status(404).json({ message: 'Shift/Worker not found' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 };
