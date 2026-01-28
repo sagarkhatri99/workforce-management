@@ -1,0 +1,47 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  role      String   @default("WORKER")
+  firstName String?
+  lastName  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  shifts    Shift[]
+  clocks    ClockEvent[]
+}
+
+model Shift {
+  id          String      @id @default(cuid())
+  title       String
+  startTime   DateTime
+  endTime     DateTime
+  location    String?
+  status      String      @default("OPEN")
+  workerId    String?
+  worker      User?       @relation(fields: [workerId], references: [id])
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  clocks      ClockEvent[]
+}
+
+model ClockEvent {
+  id        String    @id @default(cuid())
+  userId    String
+  shiftId   String?
+  type      String
+  timestamp DateTime  @default(now())
+  lat       Float?
+  lng       Float?
+  user      User      @relation(fields: [userId], references: [id])
+  shift     Shift?    @relation(fields: [shiftId], references: [id])
+}
