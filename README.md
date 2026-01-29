@@ -19,7 +19,7 @@ A lightweight, PWA-enabled workforce management system built for staffing agenci
 *   **Backend**: Node.js (Express), Prisma ORM, PostgreSQL.
 *   **Infrastructure**: Docker Compose (Nginx + Backend + Postgres).
 
-## Quick Start (Production/VM)
+## Run production locally
 
 The easiest way to run the full stack is via Docker Compose.
 
@@ -52,7 +52,7 @@ The easiest way to run the full stack is via Docker Compose.
 
 3.  **Start the services**:
     ```bash
-    docker-compose -f docker-compose.prod.yml up --build -d
+    docker compose -f docker-compose.prod.yml up -d --build
     ```
 
 4.  **Access the application**:
