@@ -1,1 +1,4 @@
 node_modules
+**/dist/
+packages/backend/dist/
+postgres-data/

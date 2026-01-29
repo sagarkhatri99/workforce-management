@@ -65,7 +65,7 @@ export const getShifts = async (req: Request, res: Response) => {
       include: { worker: { select: { name: true, email: true } } }
     });
 
-    const formattedShifts = shifts.map(s => ({
+    const formattedShifts = shifts.map((s: any) => ({
       ...s,
       skills: JSON.parse(s.skills)
     }));
