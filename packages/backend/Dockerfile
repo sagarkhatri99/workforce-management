@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM public.ecr.aws/docker/library/node:18-alpine AS builder
+FROM node:18-bookworm-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 COPY prisma ./prisma/
@@ -9,8 +9,14 @@ RUN npm run build
 RUN npx prisma generate
 
 # Stage 2: Run
-FROM public.ecr.aws/docker/library/node:18-alpine
+FROM node:18-bookworm-slim
 WORKDIR /app
+
+# Install OpenSSL and CA certificates for Prisma and secure connections
+RUN apt-get update -y && \
+    apt-get install -y openssl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
