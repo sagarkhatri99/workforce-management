@@ -1,0 +1,201 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String       @id @default(cuid())
+  email     String       @unique
+  password  String
+  name      String?
+  role      Role         @default(WORKER)
+  hourlyRate       Float?            @default(0)
+  shifts    Shift[]      // Relation to shifts assigned to this worker
+  clocks    ClockEvent[] // Relation to clock events
+  payrollSummaries PayrollSummary[]  // Reverse relation for payroll
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  WORKER
+}
+
+model Shift {
+  id          String      @id @default(cuid())
+  title       String
+  description String?
+  startTime   DateTime
+  endTime     DateTime
+  location    String?
+  skills      String      // Stored as JSON string
+  status      ShiftStatus @default(OPEN)
+
+  workerId    String?     @map("worker_id")
+  worker      User?       @relation(fields: [workerId], references: [id])
+
+  createdBy   String      // ID of manager who created it
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@map("shifts")
+}
+
+enum ShiftStatus {
+  OPEN
+  CLAIMED
+  COMPLETED
+}
+
+model ClockEvent {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  user      User      @relation(fields: [userId], references: [id])
+
+  type      ClockType
+  timestamp DateTime  @default(now())
+
+  // Optional geolocation
+  lat       Float?
+  lng       Float?
+
+  createdAt DateTime  @default(now())
+
+  @@map("clock_events")
+}
+
+enum ClockType {
+  IN
+  OUT
+}
+
+// GDPR Models
+model DSRRequest {
+  id          String      @id @default(cuid())
+  userId      String
+  type        String      // ACCESS, ERASURE
+  status      String      // PENDING, COMPLETED
+  createdAt   DateTime    @default(now())
+  fulfilledAt DateTime?
+}
+
+model AuditLog {
+  id        String    @id @default(cuid())
+  userId    String?
+  action    String
+  resource  String
+  details   String?
+  ip        String?
+  timestamp DateTime  @default(now())
+}
+
+// PAYROLL MODELS
+
+model PayrollPeriod {
+  id          String   @id @default(cuid())
+  month       Int      // 1-12
+  year        Int      // e.g. 2026
+  startDate   DateTime // e.g. 2026-02-01T00:00:00Z
+  endDate     DateTime // e.g. 2026-02-28T23:59:59Z
+  status      PayrollStatus @default(OPEN)
+
+  cutoffDate       DateTime?  // When period was locked
+  calculatedBy     String?    // userId who triggered calculation
+
+  summaries   PayrollSummary[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([month, year])
+  @@index([status])
+  @@index([year, month])
+  @@map("payroll_periods")
+}
+
+enum PayrollStatus {
+  OPEN
+  LOCKED
+  COMPLETED
+}
+
+model PayrollSummary {
+  id                  String        @id @default(cuid())
+  payrollPeriodId     String        @map("payroll_period_id")
+  payrollPeriod       PayrollPeriod @relation(fields: [payrollPeriodId], references: [id])
+
+  userId              String        @map("user_id")
+  user                User          @relation(fields: [userId], references: [id])
+
+  totalRegularHours   Float         @default(0)
+  totalOvertimeHours  Float         @default(0) // >8h daily
+  totalHours          Float         @default(0) // Regular + Overtime
+
+  grossPay            Float         @default(0) // (Regular * Rate) + (Overtime * Rate * 1.5)
+
+  shiftCount          Int           @default(0)
+  clockEventsCount    Int           @default(0)  // Total IN/OUT pairs processed
+
+  hasAnomalies        Boolean       @default(false)
+  anomalyCount        Int           @default(0)  // Count of issues found
+  anomalies           PayrollAnomaly[]
+
+  generatedAt         DateTime      @default(now())
+
+  @@unique([payrollPeriodId, userId])
+  @@index([userId])
+  @@index([payrollPeriodId, hasAnomalies])
+  @@map("payroll_summaries")
+}
+
+model PayrollAnomaly {
+  id                String   @id @default(cuid())
+  payrollSummaryId  String   @map("payroll_summary_id")
+  summary           PayrollSummary @relation(fields: [payrollSummaryId], references: [id], onDelete: Cascade)
+
+  type              AnomalyType  // MISSING_OUT, MISSING_IN, etc.
+  date              DateTime     // Which day the issue occurred
+  description       String       // e.g., "Clock IN at 09:00 with no matching OUT"
+  clockEventId      String?      @map("clock_event_id")  // Link to problematic event
+
+  resolved          Boolean   @default(false)
+  resolvedBy        String?   @map("resolved_by")
+  resolvedAt        DateTime?
+
+  createdAt         DateTime  @default(now())
+
+  @@map("payroll_anomalies")
+}
+
+enum AnomalyType {
+  MISSING_OUT
+  MISSING_IN
+  DUPLICATE_IN
+  DUPLICATE_OUT
+  EXCESSIVE_HOURS  // >16h in a day
+  ZERO_HOURS       // No clock events found
+}
+
+model OvertimeRule {
+  id          String   @id @default(cuid())
+  name        String   // e.g. "Daily Overtime"
+  type        String   // "DAILY"
+  threshold   Float    // 8.0
+  multiplier  Float    // 1.5
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+
+  @@map("overtime_rules")
+}

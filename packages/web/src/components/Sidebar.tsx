@@ -1,82 +1,57 @@
-'use client';
-
 import React from 'react';
-import {
-    Box,
-    List,
-    ListItem,
-    ListItemButton,
-    ListItemIcon,
-    ListItemText,
-    Typography,
-    Divider,
-    Avatar
-} from '@mui/material';
-import DashboardIcon from '@mui/icons-material/Dashboard';
-import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
-import PeopleIcon from '@mui/icons-material/People';
-import AccessTimeIcon from '@mui/icons-material/AccessTime';
-import PaymentsIcon from '@mui/icons-material/Payments';
-import SettingsIcon from '@mui/icons-material/Settings';
+import { NavLink } from 'react-router-dom';
+import { LayoutDashboard, Calendar, Clock, DollarSign, LogOut } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
-const menuItems = [
-    { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
-    { text: 'Schedules', icon: <CalendarMonthIcon />, path: '/dashboard/schedules' },
-    { text: 'Staff', icon: <PeopleIcon />, path: '/dashboard/staff' },
-    { text: 'Time Tracking', icon: <AccessTimeIcon />, path: '/dashboard/time-tracking' },
-    { text: 'Payroll', icon: <PaymentsIcon />, path: '/dashboard/payroll' },
-];
+export function Sidebar() {
+  const { user, logout } = useAuth();
 
-export default function Sidebar() {
-    return (
-        <Box sx={{
-            width: 260,
-            height: '100vh',
-            bgcolor: 'background.paper',
-            borderRight: '1px solid',
-            borderColor: 'divider',
-            display: 'flex',
-            flexDirection: 'column'
-        }}>
-            <Box sx={{ p: 3 }}>
-                <Typography variant="h6" sx={{ fontWeight: 800, color: 'primary.main' }}>
-                    WORKFORCE
-                </Typography>
-            </Box>
+  const links = [
+    { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { to: '/shifts', label: 'Shifts', icon: Calendar },
+  ];
 
-            <List sx={{ flexGrow: 1, px: 2 }}>
-                {menuItems.map((item) => (
-                    <ListItem key={item.text} disablePadding sx={{ mb: 1 }}>
-                        <ListItemButton sx={{
-                            borderRadius: 2,
-                            '&.Mui-selected': { bgcolor: 'primary.light', color: 'primary.contrastText' },
-                            '&:hover': { bgcolor: 'rgba(45, 63, 226, 0.04)' }
-                        }}>
-                            <ListItemIcon sx={{ minWidth: 40, color: 'inherit' }}>
-                                {item.icon}
-                            </ListItemIcon>
-                            <ListItemText primary={item.text} primaryTypographyProps={{ fontWeight: 500 }} />
-                        </ListItemButton>
-                    </ListItem>
-                ))}
-            </List>
+  if (user?.role === 'WORKER') {
+    links.push({ to: '/my-shifts', label: 'My Shifts', icon: Clock });
+  }
 
-            <Divider />
+  if (user?.role === 'ADMIN' || user?.role === 'MANAGER') {
+      links.push({ to: '/payroll', label: 'Payroll', icon: DollarSign });
+  }
 
-            <Box sx={{ p: 2 }}>
-                <ListItemButton sx={{ borderRadius: 2 }}>
-                    <ListItemIcon sx={{ minWidth: 40 }}><SettingsIcon /></ListItemIcon>
-                    <ListItemText primary="Settings" />
-                </ListItemButton>
-
-                <Box sx={{ mt: 2, display: 'flex', alignItems: 'center', p: 1 }}>
-                    <Avatar sx={{ bgcolor: 'secondary.main', mr: 2 }}>JS</Avatar>
-                    <Box>
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>John Smith</Typography>
-                        <Typography variant="caption" color="text.secondary">Admin</Typography>
-                    </Box>
-                </Box>
-            </Box>
-        </Box>
-    );
+  return (
+    <div className="w-64 bg-gray-900 text-white min-h-screen flex flex-col">
+      <div className="p-4 text-xl font-bold border-b border-gray-800">
+        Workforce
+      </div>
+      <nav className="flex-1 p-4 space-y-2">
+        {links.map(link => (
+          <NavLink
+            key={link.to}
+            to={link.to}
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-4 py-3 rounded transition-colors ${
+                isActive ? 'bg-blue-600' : 'hover:bg-gray-800'
+              }`
+            }
+          >
+            <link.icon size={20} />
+            {link.label}
+          </NavLink>
+        ))}
+      </nav>
+      <div className="p-4 border-t border-gray-800">
+        <div className="mb-4 text-sm text-gray-400">
+            {user?.name} ({user?.role})
+        </div>
+        <button
+            onClick={logout}
+            className="flex items-center gap-3 text-red-400 hover:text-red-300 w-full"
+        >
+            <LogOut size={20} />
+            Logout
+        </button>
+      </div>
+    </div>
+  );
 }

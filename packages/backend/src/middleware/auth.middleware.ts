@@ -1,110 +1,46 @@
 import { Request, Response, NextFunction } from 'express';
-import { JWTUtil } from '../utils/jwt.util';
-import { User } from '../models/User';
+import jwt from 'jsonwebtoken';
+import { JwtPayload } from '../utils/auth';
 
-// Extend Express Request type to include user
+// Extend Express Request interface
 declare global {
-    namespace Express {
-        interface Request {
-            user?: {
-                userId: string;
-                organizationId: string;
-                role: 'admin' | 'manager' | 'worker';
-            };
-        }
+  namespace Express {
+    interface Request {
+      user?: JwtPayload;
     }
+  }
 }
 
-/**
- * Authentication middleware
- * Verifies JWT token and attaches user to request
- */
-export const authenticate = async (
-    req: Request,
-    res: Response,
-    next: NextFunction
-): Promise<void> => {
-    try {
-        // Get token from header
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            res.status(401).json({ error: 'No token provided' });
-            return;
-        }
+const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 
-        const token = authHeader.substring(7); // Remove 'Bearer '
+export const authenticate = (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
 
-        // Verify token
-        const decoded = JWTUtil.verifyAccessToken(token);
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ message: 'Unauthorized: No token provided' });
+  }
 
-        // Attach user to request
-        req.user = {
-            userId: decoded.userId,
-            organizationId: decoded.organizationId,
-            role: decoded.role,
-        };
+  const token = authHeader.split(' ')[1];
 
-        next();
-    } catch (error) {
-        if (error instanceof Error) {
-            if (error.message === 'Access token expired') {
-                res.status(401).json({ error: 'Token expired', code: 'TOKEN_EXPIRED' });
-                return;
-            }
-            res.status(401).json({ error: error.message });
-            return;
-        }
-        res.status(500).json({ error: 'Authentication failed' });
-    }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ message: 'Unauthorized: Invalid token' });
+  }
 };
 
-/**
- * Authorization middleware
- * Checks if user has required role
- */
-export const authorize = (...allowedRoles: Array<'admin' | 'manager' | 'worker'>) => {
-    return (req: Request, res: Response, next: NextFunction): void => {
-        if (!req.user) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
-
-        if (!allowedRoles.includes(req.user.role)) {
-            res.status(403).json({
-                error: 'Forbidden',
-                message: `This action requires one of the following roles: ${allowedRoles.join(', ')}`,
-            });
-            return;
-        }
-
-        next();
-    };
-};
-
-/**
- * Multi-tenant middleware
- * Ensures user can only access their organization's data
- */
-export const checkOrganizationAccess = (
-    req: Request,
-    res: Response,
-    next: NextFunction
-): void => {
+export const authorize = (roles: string[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
+      return res.status(401).json({ message: 'Unauthorized' });
     }
 
-    // If request has organizationId in body/params/query, verify it matches user's org
-    const requestOrgId = req.body.organizationId || req.params.organizationId || req.query.organizationId;
-
-    if (requestOrgId && requestOrgId !== req.user.organizationId) {
-        res.status(403).json({
-            error: 'Forbidden',
-            message: 'Cannot access resources from another organization',
-        });
-        return;
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'Forbidden: Insufficient permissions' });
     }
 
     next();
+  };
 };

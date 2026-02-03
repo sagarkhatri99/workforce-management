@@ -3,28 +3,23 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
-import connectDatabase from './config/database.config';
 import authRoutes from './routes/auth.routes';
-import locationRoutes from './routes/location.routes';
-import userRoutes from './routes/user.routes';
 import shiftRoutes from './routes/shift.routes';
-import applicationRoutes from './routes/application.routes';
 import timeclockRoutes from './routes/timeclock.routes';
-import payrollRoutes from './routes/payroll.routes';
+import dashboardRoutes from './routes/dashboard.routes';
+import exportRoutes from './routes/export.routes';
 import gdprRoutes from './routes/gdpr.routes';
+import payrollRoutes from './routes/payroll.routes';
 
 dotenv.config();
 
 const app: Application = express();
 const PORT = process.env.PORT || 3000;
 
-// Connect to MongoDB
-connectDatabase();
-
 // Middleware
 app.use(helmet()); // Security headers
 app.use(cors({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3001'],
+    origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:5173'],
     credentials: true,
 }));
 app.use(express.json());
@@ -32,8 +27,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // Rate limiting
 const limiter = rateLimit({
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000'), // 1 minute
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '300'), // 300 requests per minute
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000'),
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '300'),
     message: 'Too many requests from this IP, please try again later',
     standardHeaders: true,
     legacyHeaders: false,
@@ -53,13 +48,12 @@ app.get('/health', (req: Request, res: Response) => {
 
 // API Routes
 app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/locations', locationRoutes);
-app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/shifts', shiftRoutes);
-app.use('/api/v1/applications', applicationRoutes);
-app.use('/api/v1/timeclock', timeclockRoutes);
+app.use('/api/v1/clock', timeclockRoutes);
+app.use('/api/v1/dashboard', dashboardRoutes);
+app.use('/api/v1/export', exportRoutes);
+app.use('/api/v1/dsr', gdprRoutes);
 app.use('/api/v1/payroll', payrollRoutes);
-app.use('/api/v1/gdpr', gdprRoutes);
 
 // 404 handler
 app.use((req: Request, res: Response) => {
@@ -72,7 +66,6 @@ app.use((req: Request, res: Response) => {
 // Global error handler
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
     console.error('Error:', err);
-
     res.status(500).json({
         error: 'Internal Server Error',
         message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong',
@@ -80,17 +73,10 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 });
 
 // Start server
-app.listen(PORT, () => {
-    console.log('');
-    console.log('========================================');
-    console.log('🚀 Workforce Management API Started');
-    console.log('========================================');
-    console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🌐 Server: http://localhost:${PORT}`);
-    console.log(`🏥 Health: http://localhost:${PORT}/health`);
-    console.log(`🔐 Auth API: http://localhost:${PORT}/api/v1/auth`);
-    console.log('========================================');
-    console.log('');
-});
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`🚀 Server running on http://localhost:${PORT}`);
+    });
+}
 
 export default app;
